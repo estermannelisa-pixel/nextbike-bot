@@ -1,46 +1,46 @@
-import os
+from flask import Flask
+import threading
+import time
 import requests
+import os
 from telegram import Bot
-from apscheduler.schedulers.blocking import BlockingScheduler
-import ssl
 
-# SSL Fix für Windows / lokale Tests
-ssl._create_default_https_context = ssl._create_unverified_context
+app = Flask(__name__)
 
-# Telegram Einstellungen aus Environment Variables
+# Telegram Setup
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
-if not BOT_TOKEN or not CHAT_ID:
-    raise ValueError("Bitte BOT_TOKEN und CHAT_ID als Environment Variables setzen!")
-
-CHAT_ID = int(CHAT_ID)
-
 bot = Bot(token=BOT_TOKEN)
 
-# Nextbike Sursee Märtplatz
-CITY_ID = 88            # Sursee Plus
-STATION_NUMBER = 9005   # Märtplatz
-API_URL = f"https://api.nextbike.net/maps/nextbike-live.json?city={CITY_ID}"
+# Nextbike-Check-Funktion
+CITY_ID = os.getenv("CITY_ID")  # z.B. 88 für Sursee Plus
+PLACE_NUMBER = os.getenv("PLACE_NUMBER")  # z.B. 9005 für Märtplatz
 
 def check_nextbike():
-    try:
-        response = requests.get(API_URL)
-        data = response.json()
-        places = data['countries'][0]['cities'][0]['places']
-        for place in places:
-            if place['number'] == STATION_NUMBER:
-                available = place['bikes_available_to_rent']
-                if available > 0:
-                    bot.send_message(chat_id=CHAT_ID,
-                                     text=f"Nextbike verfügbar am Märtplatz! ({available} Bikes)")
-                break
-    except Exception as e:
-        print("Fehler beim Abrufen:", e)
+    while True:
+        try:
+            url = f"https://api.nextbike.ch/v2/nextbike-api-endpoint?city={CITY_ID}"
+            response = requests.get(url)
+            data = response.json()
+            # Bikes für den ausgewählten Platz
+            available_bikes = 0
+            for place in data['cities'][0]['places']:
+                if place['number'] == int(PLACE_NUMBER):
+                    available_bikes = place['bikes_available_to_rent']
+            if available_bikes > 0:
+                bot.send_message(chat_id=CHAT_ID, text=f"{available_bikes} Bikes verfügbar!")
+        except Exception as e:
+            print("Fehler beim Check:", e)
+        time.sleep(30)  # alle 30 Sekunden prüfen
 
-# Scheduler: nur zwischen 6-8 Uhr morgens, alle 30 Sekunden prüfen
-scheduler = BlockingScheduler(timezone="Europe/Zurich")
-scheduler.add_job(check_nextbike, 'cron', hour='6-7', second='*/30')
+# Thread starten, damit Flask nicht blockiert wird
+threading.Thread(target=check_nextbike, daemon=True).start()
 
-print("Bot läuft...")
-scheduler.start()
+# einfacher Webserver für Render
+@app.route("/")
+def index():
+    return "Nextbike-Bot läuft!"
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))  # Render setzt PORT automatisch
+    app.run(host="0.0.0.0", port=port)
